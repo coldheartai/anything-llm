@@ -2,19 +2,20 @@ const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
 } = require("../../helpers/chat/responses");
+const { MODEL_MAP } = require("../modelMap");
 
-class MistralLLM {
+class DeepSeekLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.MISTRAL_API_KEY)
-      throw new Error("No Mistral API key was set.");
-
+    if (!process.env.DEEPSEEK_API_KEY)
+      throw new Error("No DeepSeek API key was set.");
     const { OpenAI: OpenAIApi } = require("openai");
+
     this.openai = new OpenAIApi({
-      baseURL: "https://api.mistral.ai/v1",
-      apiKey: process.env.MISTRAL_API_KEY ?? null,
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: "https://api.deepseek.com/v1",
     });
     this.model =
-      modelPreference || process.env.MISTRAL_MODEL_PREF || "mistral-tiny";
+      modelPreference || process.env.DEEPSEEK_MODEL_PREF || "deepseek-chat";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -22,7 +23,7 @@ class MistralLLM {
     };
 
     this.embedder = embedder ?? new NativeEmbedder();
-    this.defaultTemp = 0.0;
+    this.defaultTemp = 0.7;
   }
 
   #appendContext(contextTexts = []) {
@@ -41,73 +42,47 @@ class MistralLLM {
     return "streamGetChatCompletion" in this;
   }
 
-  static promptWindowLimit() {
-    return 32000;
+  static promptWindowLimit(modelName) {
+    return MODEL_MAP.deepseek[modelName] ?? 8192;
   }
 
   promptWindowLimit() {
-    return 32000;
+    return MODEL_MAP.deepseek[this.model] ?? 8192;
   }
 
   async isValidChatCompletionModel(modelName = "") {
-    return true;
+    const models = await this.openai.models.list().catch(() => ({ data: [] }));
+    return models.data.some((model) => model.id === modelName);
   }
 
-  /**
-   * Generates appropriate content array for a message + attachments.
-   * @param {{userPrompt:string, attachments: import("../../helpers").Attachment[]}}
-   * @returns {string|object[]}
-   */
-  #generateContent({ userPrompt, attachments = [] }) {
-    if (!attachments.length) return userPrompt;
-
-    const content = [{ type: "text", text: userPrompt }];
-    for (let attachment of attachments) {
-      content.push({
-        type: "image_url",
-        image_url: attachment.contentString,
-      });
-    }
-    return content.flat();
-  }
-
-  /**
-   * Construct the user prompt for this model.
-   * @param {{attachments: import("../../helpers").Attachment[]}} param0
-   * @returns
-   */
   constructPrompt({
     systemPrompt = "",
     contextTexts = [],
     chatHistory = [],
     userPrompt = "",
-    attachments = [], // This is the specific attachment for only this prompt
   }) {
     const prompt = {
       role: "system",
       content: `${systemPrompt}${this.#appendContext(contextTexts)}`,
     };
-    return [
-      prompt,
-      ...chatHistory,
-      {
-        role: "user",
-        content: this.#generateContent({ userPrompt, attachments }),
-      },
-    ];
+    return [prompt, ...chatHistory, { role: "user", content: userPrompt }];
   }
 
   async getChatCompletion(messages = null, { temperature = 0.7 }) {
     if (!(await this.isValidChatCompletionModel(this.model)))
       throw new Error(
-        `Mistral chat: ${this.model} is not valid for chat completion!`
+        `DeepSeek chat: ${this.model} is not valid for chat completion!`
       );
 
-    const result = await this.openai.chat.completions.create({
-      model: this.model,
-      messages,
-      temperature,
-    });
+    const result = await this.openai.chat.completions
+      .create({
+        model: this.model,
+        messages,
+        temperature,
+      })
+      .catch((e) => {
+        throw new Error(e.message);
+      });
 
     if (!result.hasOwnProperty("choices") || result.choices.length === 0)
       return null;
@@ -117,7 +92,7 @@ class MistralLLM {
   async streamGetChatCompletion(messages = null, { temperature = 0.7 }) {
     if (!(await this.isValidChatCompletionModel(this.model)))
       throw new Error(
-        `Mistral chat: ${this.model} is not valid for chat completion!`
+        `DeepSeek chat: ${this.model} is not valid for chat completion!`
       );
 
     const streamRequest = await this.openai.chat.completions.create({
@@ -133,7 +108,6 @@ class MistralLLM {
     return handleDefaultStreamResponseV2(response, stream, responseProps);
   }
 
-  // Simple wrapper for dynamic embedder & normalize interface for all LLM implementations
   async embedTextInput(textInput) {
     return await this.embedder.embedTextInput(textInput);
   }
@@ -149,5 +123,5 @@ class MistralLLM {
 }
 
 module.exports = {
-  MistralLLM,
+  DeepSeekLLM,
 };
